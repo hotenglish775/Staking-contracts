@@ -5,12 +5,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";         // Access control
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";   // Reentrancy protection
 import "@openzeppelin/contracts/security/Pausable.sol";          // Emergency pause
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";        // Safe arithmetic operations
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";           // ERC20 interface
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";           // Interface compatible with ACC-20 tokens
 
 contract SecureStaking is Ownable, ReentrancyGuard, Pausable {
     using SafeMath for uint256;
 
-    IERC20 public stakingToken;         // ERC20 token used for staking (ACC-20)
+    IERC20 public stakingToken;         // ACC-20 token used for staking
     uint256 public totalStaked;           // Total tokens staked
     uint256 public rewardRate;            // Reward rate per block
     uint256 public lastUpdateBlock;       // Last block when rewards were updated
@@ -28,6 +28,8 @@ contract SecureStaking is Ownable, ReentrancyGuard, Pausable {
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 reward);
+    event RewardRateUpdated(uint256 newRate);
+    event EmergencyWithdrawal(address indexed token, uint256 amount);
 
     constructor(address _stakingToken, uint256 _rewardRate) {
         require(_stakingToken != address(0), "Invalid token address");
@@ -47,11 +49,10 @@ contract SecureStaking is Ownable, ReentrancyGuard, Pausable {
         _;
     }
 
-    function setRewardRate(uint256 _rewardRate) external onlyOwner {
+    function setRewardRate(uint256 _rewardRate) external onlyOwner updateReward(address(0)) {
         require(_rewardRate > 0, "Reward rate must be positive");
-        rewardPerTokenStored = rewardPerToken();
-        lastUpdateBlock = block.number;
         rewardRate = _rewardRate;
+        emit RewardRateUpdated(_rewardRate);
     }
 
     function stake(uint256 amount) external nonReentrant whenNotPaused updateReward(msg.sender) {
@@ -107,5 +108,20 @@ contract SecureStaking is Ownable, ReentrancyGuard, Pausable {
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+    
+    // Emergency function to recover tokens accidentally sent to the contract
+    function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
+        require(token != address(0), "Invalid token address");
+        
+        // If withdrawing staking tokens, ensure we leave enough for rewards and staked amounts
+        if (token == address(stakingToken)) {
+            uint256 totalTokensNeeded = totalStaked;
+            uint256 contractBalance = IERC20(token).balanceOf(address(this));
+            require(contractBalance.sub(amount) >= totalTokensNeeded, "Not enough tokens left for stakers");
+        }
+        
+        require(IERC20(token).transfer(owner(), amount), "Token transfer failed");
+        emit EmergencyWithdrawal(token, amount);
     }
 }
